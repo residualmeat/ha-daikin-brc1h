@@ -284,17 +284,20 @@ class IntegrationKadomaClimate(IntegrationKadomaEntity, ClimateEntity):
     async def async_set_temperature(self, *, temperature: float, **kwargs) -> None:
         temperature = round(temperature)
 
-        # FIX: BRC1H firmware formula: result = sent + (sent - current) / 2
-        # Correct inverse: sent = (2*target + current) / 3
-        # Rounded to nearest 0.5°C (GFLOAT resolution) for clean encoding.
-        # Examples (verified against device behavior):
-        #   T=26, C=25 → sent=25.5 → result=25.75 → device displays 26 ✓
-        #   T=27, C=28 → sent=27.5 → result=27.25 → device displays 27 ✓
-        #   T=28, C=25 → sent=27   → result=28     → device displays 28 ✓
+        # FIX: BRC1H firmware formula: result = ceil(1.5 * sent - 0.5 * current)
+        # Inverse: sent must be <= (2*target + current) / 3
+        # Use FLOOR to nearest 0.5°C (not round) so we never exceed the upper bound.
+        # With round(), going up and down produce the same sent value (e.g. 25.5)
+        # but ceil() makes 25.5 from current=26 land on 26 instead of 25.
+        # Examples (verified against device):
+        #   T=26, C=25 → sent=floor(25.67*2)/2=25.5 → ceil(38.25-12.5)=ceil(25.75)=26 ✓
+        #   T=25, C=26 → sent=floor(25.33*2)/2=25.0 → ceil(37.5-13.0)=ceil(24.5)=25  ✓
+        #   T=27, C=26 → sent=floor(26.67*2)/2=26.5 → ceil(39.75-13.0)=ceil(26.75)=27 ✓
+        import math
         current = self.target_temperature
         if current is not None and current != temperature:
             raw_adjusted = (2 * temperature + current) / 3
-            adjusted = round(raw_adjusted * 2) / 2  # round to nearest 0.5°C
+            adjusted = math.floor(raw_adjusted * 2) / 2  # floor to nearest 0.5°C
             LOGGER.debug(
                 f"BRC1H firmware fix: target={temperature}°C, "
                 f"current={current}°C, sending={adjusted}°C"
