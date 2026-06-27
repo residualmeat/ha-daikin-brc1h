@@ -284,13 +284,25 @@ class IntegrationKadomaClimate(IntegrationKadomaEntity, ClimateEntity):
     async def async_set_temperature(self, *, temperature: float, **kwargs) -> None:
         temperature = round(temperature)
 
-        # FIX: Bypass kadoma's SetPointKnob.update() which merges all 17 default
-        # parameters (limits, range, mode...) at value 0 into the BLE packet.
-        # Sending those zeroed-out limit parameters causes the device to display
-        # the setpoint +1°C higher than requested.
-        # We call _send() directly with only cooling and heating setpoints.
+        # FIX: BRC1H firmware applies half the delta of what is sent:
+        #   device_result = current + round((sent - current) / 2)
+        # To achieve the desired target T from current setpoint C, we must send:
+        #   sent = 2 * T - C
+        # Examples:
+        #   current=26, want 25 → send 24 → device: 26 + (24-26)/2 = 25 ✓
+        #   current=26, want 27 → send 28 → device: 26 + (28-26)/2 = 27 ✓
+        current = self.target_temperature
+        if current is not None and current != temperature:
+            adjusted = 2 * temperature - current
+            LOGGER.debug(
+                f"BRC1H firmware fix: target={temperature}°C, "
+                f"current={current}°C, sending={adjusted}°C"
+            )
+        else:
+            adjusted = float(temperature)
+
         set_point = self.unit.set_point
-        device_temp = set_point.convert_to_device(temperature)
+        device_temp = set_point.convert_to_device(adjusted)
         await set_point._send(  # noqa: SLF001
             set_point.UPDATE_CMD_ID,
             {
