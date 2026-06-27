@@ -284,37 +284,35 @@ class IntegrationKadomaClimate(IntegrationKadomaEntity, ClimateEntity):
     async def async_set_temperature(self, *, temperature: float, **kwargs) -> None:
         temperature = round(temperature)
 
-        # FIX: BRC1H firmware formula: result = ceil(1.5 * sent - 0.5 * current)
-        # Inverse: sent must be <= (2*target + current) / 3
-        # Use FLOOR to nearest 0.5°C (not round) so we never exceed the upper bound.
-        # With round(), going up and down produce the same sent value (e.g. 25.5)
-        # but ceil() makes 25.5 from current=26 land on 26 instead of 25.
-        # Examples (verified against device):
-        #   T=26, C=25 → sent=floor(25.67*2)/2=25.5 → ceil(38.25-12.5)=ceil(25.75)=26 ✓
-        #   T=25, C=26 → sent=floor(25.33*2)/2=25.0 → ceil(37.5-13.0)=ceil(24.5)=25  ✓
-        #   T=27, C=26 → sent=floor(26.67*2)/2=26.5 → ceil(39.75-13.0)=ceil(26.75)=27 ✓
+        # FIX: The device enforces cooling_setpoint >= heating_setpoint + 1°C
+        # (minimum_differential=1, confirmed in BLE status response 0x32:0x01:0x01).
+        # When we set both to the same value, the device rejects the relevant
+        # setpoint change to maintain the gap — causing the apparent "no change".
+        # Solution: only update the setpoint for the current mode, keeping the
+        # other one 1°C away to always satisfy the constraint.
         import math
-        current = self.target_temperature
-        if current is not None and current != temperature:
-            raw_adjusted = (2 * temperature + current) / 3
-            adjusted = math.floor(raw_adjusted * 2) / 2  # floor to nearest 0.5°C
-            LOGGER.debug(
-                f"BRC1H firmware fix: target={temperature}°C, "
-                f"current={current}°C, sending={adjusted}°C"
-            )
-        else:
-            adjusted = float(temperature)
-
+        operation_mode = self.coordinator.data.get("operation_mode")
         set_point = self.unit.set_point
-        device_temp = set_point.convert_to_device(adjusted)
+
+        if operation_mode is kadoma.OperationModeValue.HEAT:
+            new_heating = temperature
+            new_cooling = temperature + 1
+        else:
+            # COOL mode (and AUTO/DRY fallback)
+            new_cooling = temperature
+            new_heating = temperature - 1
+
         await set_point._send(  # noqa: SLF001
             set_point.UPDATE_CMD_ID,
             {
-                "cooling_set_point": device_temp,
-                "heating_set_point": device_temp,
+                "cooling_set_point": set_point.convert_to_device(new_cooling),
+                "heating_set_point": set_point.convert_to_device(new_heating),
             },
         )
         self.coordinator.data["set_point"].update(
-            {"cooling_set_point": temperature, "heating_set_point": temperature}
+            {
+                "cooling_set_point": new_cooling,
+                "heating_set_point": new_heating,
+            }
         )
         self.async_write_ha_state()
