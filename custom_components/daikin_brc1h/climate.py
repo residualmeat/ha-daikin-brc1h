@@ -290,7 +290,6 @@ class IntegrationKadomaClimate(IntegrationKadomaEntity, ClimateEntity):
         # setpoint change to maintain the gap — causing the apparent "no change".
         # Solution: only update the setpoint for the current mode, keeping the
         # other one 1°C away to always satisfy the constraint.
-        import math
         operation_mode = self.coordinator.data.get("operation_mode")
         set_point = self.unit.set_point
 
