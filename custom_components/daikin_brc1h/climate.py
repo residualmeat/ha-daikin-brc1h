@@ -284,16 +284,17 @@ class IntegrationKadomaClimate(IntegrationKadomaEntity, ClimateEntity):
     async def async_set_temperature(self, *, temperature: float, **kwargs) -> None:
         temperature = round(temperature)
 
-        # FIX: BRC1H firmware applies half the delta of what is sent:
-        #   device_result = current + round((sent - current) / 2)
-        # To achieve the desired target T from current setpoint C, we must send:
-        #   sent = 2 * T - C
-        # Examples:
-        #   current=26, want 25 → send 24 → device: 26 + (24-26)/2 = 25 ✓
-        #   current=26, want 27 → send 28 → device: 26 + (28-26)/2 = 27 ✓
+        # FIX: BRC1H firmware formula: result = sent + (sent - current) / 2
+        # Correct inverse: sent = (2*target + current) / 3
+        # Rounded to nearest 0.5°C (GFLOAT resolution) for clean encoding.
+        # Examples (verified against device behavior):
+        #   T=26, C=25 → sent=25.5 → result=25.75 → device displays 26 ✓
+        #   T=27, C=28 → sent=27.5 → result=27.25 → device displays 27 ✓
+        #   T=28, C=25 → sent=27   → result=28     → device displays 28 ✓
         current = self.target_temperature
         if current is not None and current != temperature:
-            adjusted = 2 * temperature - current
+            raw_adjusted = (2 * temperature + current) / 3
+            adjusted = round(raw_adjusted * 2) / 2  # round to nearest 0.5°C
             LOGGER.debug(
                 f"BRC1H firmware fix: target={temperature}°C, "
                 f"current={current}°C, sending={adjusted}°C"
