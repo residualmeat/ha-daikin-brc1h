@@ -273,10 +273,31 @@ class IntegrationKadomaClimate(IntegrationKadomaEntity, ClimateEntity):
 
         return temp
 
+    @property
+    def current_temperature(self) -> float | None:
+        """Return the current temperature from the indoor sensor."""
+        sensors = self.coordinator.data.get("sensors")
+        if sensors is None:
+            return None
+        return sensors.get("indoor")
+
     async def async_set_temperature(self, *, temperature: float, **kwargs) -> None:
         temperature = round(temperature)
 
-        await self.unit.set_point.update(cooling=temperature, heating=temperature)
+        # FIX: Bypass kadoma's SetPointKnob.update() which merges all 17 default
+        # parameters (limits, range, mode...) at value 0 into the BLE packet.
+        # Sending those zeroed-out limit parameters causes the device to display
+        # the setpoint +1°C higher than requested.
+        # We call _send() directly with only cooling and heating setpoints.
+        set_point = self.unit.set_point
+        device_temp = set_point.convert_to_device(temperature)
+        await set_point._send(  # noqa: SLF001
+            set_point.UPDATE_CMD_ID,
+            {
+                "cooling_set_point": device_temp,
+                "heating_set_point": device_temp,
+            },
+        )
         self.coordinator.data["set_point"].update(
             {"cooling_set_point": temperature, "heating_set_point": temperature}
         )
